@@ -1,0 +1,357 @@
+<!DOCTYPE html><html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Ambient Speech Visualizer</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+      font-family: Inter, system-ui, sans-serif;
+    }body {
+  overflow: hidden;
+  background: #040816;
+  color: white;
+}
+
+canvas {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  background:
+    radial-gradient(circle at top, rgba(255,255,255,0.08), transparent 30%),
+    radial-gradient(circle at bottom left, rgba(236,72,153,0.18), transparent 28%),
+    radial-gradient(circle at bottom right, rgba(59,130,246,0.15), transparent 32%);
+  backdrop-filter: blur(4px);
+}
+
+.ui {
+  position: relative;
+  z-index: 5;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 24px;
+}
+
+.topbar,
+.footer {
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 24px;
+  padding: 18px 22px;
+  backdrop-filter: blur(20px);
+}
+
+.center {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.orb {
+  width: min(80vw, 520px);
+  aspect-ratio: 1;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.1);
+  backdrop-filter: blur(24px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 40px;
+  position: relative;
+  overflow: hidden;
+  box-shadow: 0 0 80px rgba(139,92,246,0.18);
+}
+
+.orbGlow {
+  position: absolute;
+  inset: 20px;
+  border-radius: inherit;
+  filter: blur(60px);
+  background: radial-gradient(circle, rgba(236,72,153,0.45), transparent 70%);
+  transition: all 0.2s ease;
+}
+
+.micBtn {
+  width: 90px;
+  height: 90px;
+  border-radius: 999px;
+  border: none;
+  cursor: pointer;
+  font-size: 34px;
+  background: white;
+  transition: transform 0.2s ease;
+  z-index: 2;
+}
+
+.micBtn:hover {
+  transform: scale(1.06);
+}
+
+h1 {
+  margin-top: 24px;
+  font-size: clamp(32px, 6vw, 58px);
+  line-height: 1;
+  z-index: 2;
+}
+
+p {
+  margin-top: 16px;
+  color: rgba(255,255,255,0.7);
+  max-width: 520px;
+  line-height: 1.7;
+  z-index: 2;
+}
+
+.stats {
+  display: flex;
+  gap: 12px;
+  margin-top: 22px;
+  flex-wrap: wrap;
+  justify-content: center;
+  z-index: 2;
+}
+
+.pill {
+  padding: 10px 14px;
+  border-radius: 999px;
+  background: rgba(0,0,0,0.22);
+  border: 1px solid rgba(255,255,255,0.08);
+  font-size: 13px;
+}
+
+.transcript {
+  margin-top: 10px;
+  color: rgba(255,255,255,0.85);
+  line-height: 1.7;
+}
+
+  </style>
+</head>
+<body>
+  <canvas id="canvas"></canvas>
+  <div class="overlay"></div>  <div class="ui">
+    <div class="topbar">
+      <strong>Ambient Speech Visualizer</strong>
+    </div><div class="center">
+  <div class="orb">
+    <div class="orbGlow" id="orbGlow"></div>
+
+    <button class="micBtn" id="micBtn">🎤</button>
+
+    <h1>Speak into the mic</h1>
+    <p>
+      Live colorful ambient visualization reacting to your speech and voice energy in real time.
+    </p>
+
+    <div class="stats">
+      <div class="pill" id="status">Mic Off</div>
+      <div class="pill" id="volume">Volume 0%</div>
+      <div class="pill" id="words">0 words</div>
+    </div>
+  </div>
+</div>
+
+<div class="footer">
+  <strong>Live Transcript</strong>
+  <div class="transcript" id="transcript">
+    Click the mic button and start speaking.
+  </div>
+</div>
+
+  </div>  <script>
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+
+    const micBtn = document.getElementById('micBtn');
+    const transcriptEl = document.getElementById('transcript');
+    const statusEl = document.getElementById('status');
+    const volumeEl = document.getElementById('volume');
+    const wordsEl = document.getElementById('words');
+    const orbGlow = document.getElementById('orbGlow');
+
+    let audioContext;
+    let analyser;
+    let stream;
+    let recognition;
+    let isListening = false;
+
+    function resize() {
+      canvas.width = innerWidth;
+      canvas.height = innerHeight;
+    }
+
+    resize();
+    addEventListener('resize', resize);
+
+    const particles = Array.from({ length: 24 }, () => ({
+      x: Math.random() * innerWidth,
+      y: Math.random() * innerHeight,
+      r: 40 + Math.random() * 140,
+      vx: (Math.random() - 0.5) * 0.4,
+      vy: (Math.random() - 0.5) * 0.4,
+    }));
+
+    function draw(volume = 0, bass = 0, freq = []) {
+      ctx.clearRect(0, 0, innerWidth, innerHeight);
+
+      ctx.fillStyle = 'rgba(5,8,22,0.2)';
+      ctx.fillRect(0, 0, innerWidth, innerHeight);
+
+      particles.forEach((p, i) => {
+        p.x += p.vx * (1 + volume * 8);
+        p.y += p.vy * (1 + volume * 8);
+
+        if (p.x < -200) p.x = innerWidth + 200;
+        if (p.x > innerWidth + 200) p.x = -200;
+        if (p.y < -200) p.y = innerHeight + 200;
+        if (p.y > innerHeight + 200) p.y = -200;
+
+        const radius = p.r * (1 + volume * 1.6);
+
+        const gradient = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, radius);
+        gradient.addColorStop(0, `rgba(${120 + i * 4},${80 + i * 5},255,0.25)`);
+        gradient.addColorStop(1, 'rgba(0,0,0,0)');
+
+        ctx.fillStyle = gradient;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, radius, 0, Math.PI * 2);
+        ctx.fill();
+      });
+
+      const cx = innerWidth / 2;
+      const cy = innerHeight / 2;
+
+      for (let ring = 0; ring < 5; ring++) {
+        ctx.beginPath();
+
+        const baseRadius = 120 + ring * 50 + volume * 80;
+
+        for (let i = 0; i <= 180; i++) {
+          const angle = (i / 180) * Math.PI * 2;
+          const idx = Math.floor((i / 180) * freq.length);
+          const amp = (freq[idx] || 0) / 255;
+
+          const radius = baseRadius * (1 + amp * 0.4);
+
+          const x = cx + Math.cos(angle) * radius;
+          const y = cy + Math.sin(angle) * radius;
+
+          if (i === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        }
+
+        ctx.closePath();
+        ctx.strokeStyle = `rgba(255,255,255,${0.08 + ring * 0.03})`;
+        ctx.lineWidth = 2;
+        ctx.stroke();
+      }
+
+      orbGlow.style.transform = `scale(${1 + volume * 0.25})`;
+      orbGlow.style.opacity = 0.5 + volume * 0.5;
+
+      requestAnimationFrame(loop);
+    }
+
+    function loop() {
+      if (!analyser) {
+        draw();
+        return;
+      }
+
+      const data = new Uint8Array(analyser.frequencyBinCount);
+      analyser.getByteFrequencyData(data);
+
+      let sum = 0;
+      let bass = 0;
+
+      for (let i = 0; i < data.length; i++) {
+        sum += data[i];
+        if (i < 12) bass += data[i];
+      }
+
+      const avg = sum / data.length / 255;
+      const bassAvg = bass / 12 / 255;
+
+      volumeEl.innerText = `Volume ${Math.round(avg * 100)}%`;
+
+      draw(avg, bassAvg, data);
+    }
+
+    loop();
+
+    async function startMic() {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+
+      audioContext = new (window.AudioContext || window.webkitAudioContext)();
+      analyser = audioContext.createAnalyser();
+      analyser.fftSize = 1024;
+
+      const source = audioContext.createMediaStreamSource(stream);
+      source.connect(analyser);
+
+      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+      if (SpeechRecognition) {
+        recognition = new SpeechRecognition();
+        recognition.continuous = true;
+        recognition.interimResults = true;
+
+        recognition.onresult = (event) => {
+          let text = '';
+
+          for (let i = 0; i < event.results.length; i++) {
+            text += event.results[i][0].transcript + ' ';
+          }
+
+          transcriptEl.innerText = text;
+          wordsEl.innerText = `${text.trim().split(/\s+/).filter(Boolean).length} words`;
+        };
+
+        recognition.start();
+      }
+
+      statusEl.innerText = 'Mic Active';
+      micBtn.innerText = '🛑';
+      isListening = true;
+    }
+
+    function stopMic() {
+      if (stream) {
+        stream.getTracks().forEach(track => track.stop());
+      }
+
+      if (recognition) recognition.stop();
+      if (audioContext) audioContext.close();
+
+      analyser = null;
+      isListening = false;
+
+      statusEl.innerText = 'Mic Off';
+      micBtn.innerText = '🎤';
+    }
+
+    micBtn.addEventListener('click', async () => {
+      try {
+        if (!isListening) await startMic();
+        else stopMic();
+      } catch (e) {
+        alert('Microphone permission denied or unsupported browser.');
+        console.error(e);
+      }
+    });
+  </script></body>
+</html>
